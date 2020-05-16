@@ -1,13 +1,13 @@
 rm(list = ls())
 
-# R���룺��CV��ѡģ��
+# R代码：用CV来选模型
 
-#ģ��1��ȫģ��
-#ģ��2��ֻ��������Э������crim + nox
+#模型1：全模型
+#模型2：只考虑两个协变量：crim + nox
 
 set.seed ( 1 )
 
-# ��֤������
+# 验证集方法
 library ( MASS )
 data ( Boston )
 dim ( Boston )
@@ -61,7 +61,7 @@ detach ( Boston )
 mean(cv.err2)
 
 
-# K�۽�����֤��
+# K折交叉验证法
 K <- 10
 n <- dim(Boston)[1]
 n/10
@@ -83,7 +83,7 @@ for ( i in 1 : K ) {
 }
 mean(err3)
 
-##ѡģ��
+##选模型
 err4 <- rep(0, K)
 for ( i in 1 : K ) {
   test <- index.list[[i]]
@@ -95,6 +95,6 @@ mean(err4)
 
 
 
-#### �κ�˼���� ����CVѡ�����õ�ģ��
+#### 课后思考： 请用CV选择出最好的模型
 
 
