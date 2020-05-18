@@ -1,15 +1,15 @@
-�?
+ï»?
 
 setwd("D:\\ai")
 
-# 读入糖尿病数�?
+# è¯»å…¥ç³–å°¿ç—…æ•°æ?
 library(readxl)
 d1 <- read_excel("diabetes.xlsx")
 X <- d1[, names(d1) != "class"]
 y <- factor(d1$class)
 
 
-# 神经网络建模
+# ç¥žç»ç½‘ç»œå»ºæ¨¡
 library(RSNNS)
 library(caret)
 m1 <- train(X, y, method = "mlp", size = c(3, 2))
@@ -25,7 +25,7 @@ roc1
 plot(roc1, print.auc = TRUE, print.thres = TRUE)
 
 
-# 使用 neuralnet �?
+# ä½¿ç”¨ neuralnet åŒ?
 library(neuralnet)
 m1 <- neuralnet(class~pregnant+glucose+pressure+triceps+insulin+mass+pedigree+age, d1, hidden=c(2, 2))
 m1$result.matrix
@@ -43,7 +43,7 @@ confusionMatrix(y, p1, positive = "pos")
 
 
 
-# MXNet 的基础操作
+# MXNet çš„åŸºç¡€æ“ä½œ
 
 #cran <- getOption("repos")
 #cran["dmlc"] <- "https://apache-mxnet.s3-accelerate.dualstack.amazonaws.com/R/CRAN/"
@@ -67,7 +67,7 @@ mx.nd.dot(x1, y1)
 mx.nd.concat(list(x1, x1), dim = 1)
 mx.nd.concat(list(x1, x1), dim = 0)
 
-mx.nd.slice.axis(y1, axis = 1, begin = 1, end = 3)  #前闭后开
+mx.nd.slice.axis(y1, axis = 1, begin = 1, end = 3)  #å‰é—­åŽå¼€
 
 x2 <- mx.nd.array(matrix(1:6, 2, 3))
 class(x2)
@@ -79,7 +79,7 @@ x4 <- mx.nd.ones(c(3, 4), ctx = mx.gpu())
 x4
 
 
-# 深度学习建模
+# æ·±åº¦å­¦ä¹ å»ºæ¨¡
 X1 <- as.matrix(X)
 y1 <- as.numeric(y) - 1
 
