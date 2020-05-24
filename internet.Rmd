@@ -1,0 +1,236 @@
+---
+title: "internet"
+date: "2020/5/10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 互联网数据分析（推荐系统）
+
+## 数据简介
+
+本节以阿里巴巴提供的淘宝用户行为数据集（UserBehavior）为例，
+展示推荐系统如何利用数据创造价值。
+
+UserBehavior 数据集的结构相对简单，只包含 5 个变量，分别为：用户 ID、商品 ID、商品所属类别 ID、消费行为、时间，各个变量的简单归纳如下表。
+
+| 变量 | 类型 |
+|:----:|:----:|
+| 用户 ID | 整数 |
+| 商品 ID | 整数 |
+| 商品类目 ID | 整数 |
+| 行为类型 | 字符串，枚举类型 |
+| 时间 | 时间戳 |
+
+其中，行为类型包括点击商品详情页（pv）、购买（buy）、加入购物车（cart）和收藏（fav）。每一行表示某用户于某个时间点在移动购物平台进行的一次操作，例如“小明在 2020 年 1 月 1 日将属于电子产品的某品牌手机加入购物车”。该数据集一共包含 987,994 名用户对 4,162,024 件商品（从属于 9,439 个类别）的 100,150,807 次消费行为。阿里巴巴已经对数据进行脱敏处理，只显示商品及类别的编号，不显示具体名称。
+
+## 数据预处理
+
+为方便读者后期实践，本节从原始数据集中随机抽取部分用户数据用于分析展示。
+
+值得注意的是，由于该数据集的用户行为矩阵较为稀疏，在子数据集上使用传统推荐算法可能会效果不佳。例如，在使用基于用户的协同过滤算法时，可能会出现用户对应的行向量之间的余弦值
+均为 0 的情况，导致用户对未购买商品的感兴趣程度均为 0，无法输出推荐结果。
+
+因此，在本节的推荐系统建模分析示例中，只对商品类别而非商品进行推荐。换言之，当某用户对某一类商品有过消费行为（包括点击详情、购买、加入购物车和收藏）即记为该用户对此类商品感兴趣。考虑 UserBehavior 数据集中平均每个类别包含约 441 件商品，这一操作可以大大降低用户行为矩阵的稀疏程度。
+
+根据这一规则，本节在 9,439 类商品中截取用户总感兴趣次数超过一定比例的热门商品类别，使行为矩阵变得更加稠密且用户之间的相似性信号更强，最终整理得到用于分析的数据集，在 R 中的具体操作如下。
+
+**注意：**由于完整数据集较大，考虑到传输速度与存储空间有限，数据预处理部分只展示相关 R 代码供同学们参考，不运行。如果读者对该过程感兴趣，可以到
+[阿里数据开放平台](https://tianchi.aliyun.com/dataset/dataDetail?dataId=649) 选择 UserBehavior.csv.zip 自行下载该数据集并运行该部分代码。
+
+### 读取数据集
+
+首先进行数据集的读取。考虑到完整数据集较大（3.41 G），所以使用 data.table 包中的 fread 函数进行快速读取（需要约 10 分钟）。
+
+如果已经将数据文件 UserBehavior.csv 放在同一个文件夹中，可以直接在 fread 函数中输入文件名读取。如果将数据文件放置在其他文件夹，则需要输入完整路径。
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=TRUE, paged.print=FALSE}
+library(data.table)
+tc <- fread("UserBehavior.csv")
+head(tc) # 查看前6行记录
+```
+
+通过查看前 6 行记录，可以看到数据共有 5 列，分别表示
+用户 ID、商品 ID、商品所属类别 ID、消费行为、时间。
+
+### 随机抽取 1000 名用户
+
+为了减小数据规模，从所有用户中随机抽取 1000 名用户。
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=TRUE, paged.print=FALSE}
+user_id <- unique(tc$V1) # 获取用户id
+sam <- sample(user_id, 1000) # 根据id随机抽1000名用户
+tc_sam <- subset(tc, V1 %in% sam) # 取出这些用户对应数据
+tc_sam <- tc_sam[order(tc_sam$V1), ] # 根据id号重排
+mat <- as.matrix(table(tc_sam$V1, tc_sam$V3)) # 得到行为矩阵
+dim(mat) # 得到此时的用户数（行数）和商品类别数（列数）
+```
+
+### 抽取热门商品
+
+在上一步抽取的数据中，统计每类商品被消费的次数，
+并抽取被消费次数大于等于 15 的热门商品类别对应的数据。
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=TRUE, paged.print=FALSE}
+col_sum <- colSums(mat) # 统计每类商品被消费的次数
+item_id <- sort(unique(tc_sam$V3)) # 对商品类别id进行排列
+item_id <- item_id[which(col_sum >= 15)] # 得到被消费次数大于等于15次的商品类别id
+tc_sam <- subset(tc_sam, V3 %in% item_id) # 根据类别id抽取子数据集
+mat <- as.matrix(table(tc_sam$V1, tc_sam$V3)) # 更新行为矩阵
+dim(mat) # 得到此时的用户数（行数）和商品类别数（列数）
+```
+
+### 抽取活跃用户
+
+在上一步抽取的数据中，统计每个用户消费的商品类别数，
+并抽取消费商品类别数大于等于 30 的活跃用户对应的数据。
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=TRUE, paged.print=FALSE}
+row_sum <- rowSums(mat) # 统计每个用户消费的商品类别数
+index_g30 <- unique(tc_sam$V1)[which(row_sum >= 30)] # 得到消费商品类别数大于等于30的用户id
+tc_sam <- subset(tc_sam, V1 %in% index_g30) # 根据用户id抽取子数据集
+mat <- as.matrix(table(tc_sam$V1, tc_sam$V3)) # 更新行为矩阵
+dim(mat) # 得到此时的用户数（行数）和商品类别数（列数）
+write.csv(tc_sam, "tc_sam.csv", row.names = FALSE) # 将子数据集保存到该文件夹中
+```
+
+通过上述操作，我们得到了 UserBehavior 数据集的一个子集，其中包括 760 个活跃用户对于 783 个热门商品类别的消费行为记录（**注意：**由于抽样的随机性，此处的用户数和商品类别数会与书中的有所差异，使得最后模型的结果也略有不同）。该数据集不仅在规模上远小于原来，而且对应的用户行为矩阵也更加稠密，使得一些较为初等的推荐模型（如基于用户、基于商品的协同过滤模型）可以得到更好的推荐结果。
+
+## 推荐模型构建
+
+### 划分训练集和测试集
+
+**注意：**以下代码是在通过上述数据处理流程得到的子数据集上进行操作的，所以可以直接运行出结果。
+
+由于模型是基于行为矩阵进行构建的，所以在划分训练集和测试集时，直接根据行为矩阵的行进行划分即可。取前 600 个用户对应的行为矩阵作为训练集，其余用户作为测试集。
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(data.table)
+tc_sam <- fread("tc_sam.csv") # 读取子数据集
+user_id <- sort(unique(tc_sam$V1)) # 对用户id排序
+item_id <- sort(unique(tc_sam$V3)) # 对商品类别id排序
+mat <- as.matrix(table(tc_sam$V1, tc_sam$V3)) # 行为矩阵
+mat_train <- mat[1:600, ] # 取前600个用户对应的行为矩阵
+```
+
+### 根据时间戳划分测试集
+
+其余用户数据作为测试集考察推荐模型的准确率、召回率和新奇性。按照时间戳的顺序，将测试集中的每个用户数据分为前后两段，以前半部分数据作为模型的输入，后半部分数据作为模型的真值，并准备与模型的输出进行比较。
+
+例如，测试集中的某用户共在 8 个时间点对 8 个不同类别的商品有过消费行为，其在前 4 个时间点消费了类别 id 为 10、12、23、37 的商品，在后 4 个时间点消费了类别 id 为 1、2、4、40 的商品，那么我们在训练得到推荐模型后，对于该用户，以前 4 类商品（10、12、23、37）作为模型的输入，得到其可能购买的商品类别的预测值，并与其实际购买的商品类别（1、2、4、40 ）进行比较，以此评价模型的预测能力。
+
+通过以下代码将测试集数据根据时间戳划分为前后两部分，并分别与训练集数据合并。
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+mat_all <- mat_train
+mat_all_copy <- mat_train
+for(i in 601:nrow(mat)){
+  id <- user_id[i]
+  sub <- subset(tc_sam, V1 == id) # 抽取第i个用户的数据
+  time_len <- nrow(sub) # 得到该用户的时间戳长度
+  
+  sub_before <- sub[1:round(time_len/2), ] # 取前半部分数据
+  # 构建该用户的行为向量（前半部分）
+  sub_vector <- rep(0, ncol(mat_train)) 
+  sub_vector[which(item_id %in% sub_before$V3)] <- 1
+  mat_all <- rbind(mat_all, sub_vector) # 与之前所有用户数据合并
+  
+  sub_after <- sub[(round(time_len/2)+1):time_len, ] # 取后半部分数据
+  # 构建该用户的行为向量（前半部分）
+  sub_vector <- rep(0, ncol(mat_train))
+  sub_vector[which(item_id %in% sub_after$V3)] <- 1
+  mat_all_copy <- rbind(mat_all_copy, sub_vector) # 与之前所有用户数据合并
+}
+
+# 若用户对某类商品有多次消费记录，则行为矩阵对应元素取1，否则取0
+mat_all[which(mat_all > 0)] <- 1 
+mat_all_copy[which(mat_all_copy > 0)] <- 1
+```
+
+### 模型构建（以基于流行度的模型为例）
+
+下面以基于流行度的模型为例，使用 R 包 recommenderlab 中的 Recommender 函数构建推荐模型。可以看到，在该函数中，只需要修改参数 method 的取值，就可以选择想要构建的常见推荐模型。在本书中比较的几种模型对应的参数取值为：
+
+- 随机推荐：RANDOM
+- 基于流行度：POPULAR
+- 基于商品的协同过滤：IBCF
+- 基于用户的协同过滤：UBCF
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(recommenderlab)
+m <- matrix(as.vector(mat_all), ncol = ncol(mat_all), 
+            dimnames = list(user = paste("u", 1:nrow(mat_all), sep = ''),
+                            item = paste ("i", 1:ncol(mat_all), sep = ''))) # 对行为矩阵的行和列进行编号
+r <- as (m, "binaryRatingMatrix") # 将行为矩阵转化为相应格式
+r_train <- r[1:600, ] # 取前600行（训练集）
+rec_model <- Recommender(data = r_train, method = "POPULAR") # 构建推荐模型（基于流行度）
+```
+
+通过上述操作，基于训练集数据，得到了一个基于流行度的推荐模型，并命名为 rec_model。
+
+### 预测
+
+接下来，在上述模型中输入测试集用户在时间戳前半部分的消费记录，并向每个用户推荐 20 类商品。
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+n_recommended <- 20 # 向每个用户推荐20类商品
+r_test <- r[601:nrow(mat)] # 取测试集（时间戳的前半部分）
+rec_pred <- predict(object = rec_model, newdata = r_test, n = n_recommended) # 由推荐模型得到测试集用户的预测值
+```
+
+可以查看每个用户的推荐结果，以测试集的第一个用户为例：
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# 查看测试集第一个用户的推荐结果
+rec_u1 <- rec_pred@items[[1]] 
+rec_u1
+```
+
+## 结果评估
+
+按照时间戳的顺序，将测试集中的每个用户数据分为前后两段，以前半部分数据作为模型的输入，
+模型输出向用户 $u$ 推荐的商品集合 $\mathcal{P}_{u}$。记该用户在后半部分数据中实际购买的商品集合为 $\mathcal{G}_{u}$，
+则对于用户 $u$，算法推荐结果的准确率（Precision）和召回率（Recall）分别为：
+
+$$
+\operatorname{Precision}(u)=\frac{\left|\mathcal{P}_{u} \cap \mathcal{G}_{u}\right|}{\left|\mathcal{P}_{u}\right|}, \quad \operatorname{Recall}(u)=\frac{\left|\mathcal{P}_{u} \cap \mathcal{G}_{u}\right|}{\left|\mathcal{G}_{u}\right|},
+$$
+其中，准确率表示在推荐的商品中该用户实际购买的比例，召回率表示用户实际购买的商品中出现推荐商品的比例。综合考虑两指标，
+定义F-measure为：
+
+$$
+\text { F-Measure }(u)=\frac{2 * \operatorname{Precision}(u) * \operatorname{Recall}(u)}{\operatorname{Precision}(u)+\operatorname{Recall}(u)}.
+$$
+在推荐系统中，算法是否能为用户推荐尚未消费但可能感兴趣的商品数量也是一个重要的评价指标。定义 $\mathcal{S}_u$ 为用户 $u$ 在前半部分数据中已经购买的商品，则算法的新奇性定义为：
+
+$$
+\operatorname{Novelty}(u) = \frac{\left|\mathcal{P}_{u} \backslash \mathcal{S}_{u}\right|}{\left|\mathcal{P}_{u}\right|}.
+$$
+新奇性表示算法给该用户推荐的商品中新商品所占的比例。对测试集中的每个用户，分别计算以上指标并取期望，就得到算法在整个测试集上的评价指标取值。
+
+根据以上定义，对测试集中的每个用户分别计算上述指标的得分，并取平均值作为该模型在测试集上的得分。（注意：由于 recommenderlab 包默认会在推荐结果中剔除用户以及购买的商品，所以可以看到 Novelty 为 100%。）
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# 初始化各指标对应向量，用于记录测试集每个用户的得分
+pre <- recall <- Fm <- Novel <- rep(0, nrow(mat)-600)
+
+# 根据模型对测试集用户的推荐商品类别与其在时间戳后半段的实际消费商品类别，分别计算以上指标
+for(i in 1:length(pre)){
+  pre[i] <- length(intersect(rec_pred@items[[i]], which(mat_all_copy[600+i,] == 1)))/
+    length(rec_pred@items[[i]])
+  recall[i] <- length(intersect(rec_pred@items[[i]], which(mat_all_copy[600+i,] == 1)))/
+    length(which(mat_all_copy[600+i,] == 1))
+  Fm[i] <-ifelse(pre[i]+recall[i] == 0, 0, 2*pre[i]*recall[i]/(pre[i]+recall[i]))
+  Novel[i] <- 1-length(intersect(rec_pred@items[[i]], which(mat_all[600+i,] == 1)))/
+    length(rec_pred@items[[i]])
+}
+
+# 取各指标的平均值，并保留5位小数
+round(mean(pre), 5)
+round(mean(recall), 5)
+round(mean(Fm), 5)
+round(mean(Novel), 5)
+```
