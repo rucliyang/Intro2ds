@@ -1,0 +1,267 @@
+```{r setup, include=FALSE}
+options(
+  htmltools.dir.version = FALSE, formatR.indent = 2, width = 55, digits = 4
+)
+
+##### 加载R包 ####
+library(ggplot2)
+library(RColorBrewer)
+library(ggthemes)
+library(scales)
+library(extrafont)
+library(corrplot)
+library(Cairo)
+library(Matrix)
+library(reshape2)
+library(arules)
+
+##### 设置工作路径 #####
+setwd('D:/dsdata/dsdata/零售')
+##### 读入数据 ####
+visitdata <- read.csv('visitdata.csv')
+###数据是从2014-05-01开始到2015-04-30一年的数据,36个店
+posdata <- read.csv('posdata.csv')
+###数据是从2014-07-01开始到2014-12-31半年的数据,34个店
+
+##### 数据预处理 ####
+
+## 对原始数据中的时间转化为Date格式
+visitdata$pos_date <- as.Date(visitdata$pos_date)
+posdata$pos_date <- as.Date(posdata$pos_date)
+store <- levels(unique(posdata$store))
+count_product <- NULL
+for (i in 1:length(store)) {
+  count_product[i] <-  length(unique(posdata[which(posdata$store==store[i]),]$product))
+}
+###画一个男女总体比例图
+num <- colSums(visitdata[,3:4])
+sex <- c('male', 'female')
+
+df <- data.frame(sex = sex, num = num)
+p <- ggplot(data = df,
+            mapping = aes(x = 'Sex', y = num, fill = sex)) + 
+            geom_bar(stat = 'identity', position = 'stack', width = 0.2)
+
+label <- c('female(25.4%)', 'male(74.6%)')
+labels <- c('male', 'female')
+p + 
+  coord_polar(theta = 'y', start = 100) + #start可以转这个圆盘
+  labs(x = '', y = '', title = '') + 
+  theme(axis.text = element_blank()) + 
+  theme(axis.ticks = element_blank()) + 
+  scale_fill_discrete(labels = label) + 
+  theme(legend.text = element_text(size=20), legend.title = element_text(size=20), legend.key.size = unit(30, 'pt')) + 
+  geom_text(aes(y = df$num/2 + c(0, cumsum(df$num)[-length(df$num)]), x = (sum(df$num) + 50000)/3500000, label = labels), size = 7)
+
+###按照日期加和
+time_pro <- aggregate(x = posdata[c('count')], by = list(posdata$product, posdata$pos_date), FUN = sum)
+
+###找出常年有售的商品种类
+season_product <- NULL
+produ_list <- unique(posdata$product)
+for (i in 1:length(produ_list)) {
+  if(nrow(posdata[which(posdata$product==produ_list[i]),])>30)
+    season_product <- c(season_product, as.character(produ_list[i]))
+}
+
+###找出关联度比较大的商品种类
+corona <- c("P01012", "P00934", "P01152", "P00903", "P00584", "P00435", "P00292", "P00541", "P00038", "P00143")
+
+
+```
+
+# 零售数据分析
+
+## 数据简介
+
+本案例使用一个真实连锁便利店POS机汇总记录的脱敏后数据，总部希望基于门店销售数据优化运营模式，为不同门店设计最优的进货方案。本案例采用如图1的分析思路：一方面基于销售数据挖掘最优的商品组合；另一方面根据商品在不同时期的销售量调整进货量。
+为了优化门店进货种类，除了淘汰滞销商品和保留畅销商品外，可以利用相关性分析或关联规则等方法找到可以互相促进销售的商品组合，也可以通过聚类分析等方法找到顾客群体和规模相似的门店，互相取长补短以更新商品清单。为了确定每类商品在不同时期的进货量，可以使用时间序列分析方法刻画商品在销售方面体现出的季节性规律，在市场需求量出现较大变化之前调整商品进货量。
+
+![分析框架](figure/kuang.jpg)
+
+
+
+## 数据预处理
+
+本数据包括两个文件：一个记录了2014年5月1日至2015年4月30日间36个门店每日不同性别顾客的数量，另一个记录了2014年7月1日至2014年12月31日间34个门店中所出售的商品及其日销量。两个数据集的信息见下表：
+
+### 顾客性别信息
+
+| 变量名 | 变量含义 | 变量类型 | 备注 |
+| ------ | ------ | ------ | ------ |
+|pos_date|时间|Date|记录交易日期|
+|store|商店编号|Factor|商店的唯一标识|
+|male_num|男顾客数量|Numeric|记录当日男性顾客数量|
+|female_num|女顾客数量|Numeric|记录当日女性顾客数量|
+
+### 商品出售信息
+
+| 变量名 | 变量含义 | 变量类型 | 备注 |
+| ------ | ------ | ------ | ------ |
+|pos_date|时间|Date|记录交易日期|
+|store|商店编号|Factor|商店的唯一标识|
+|product|商品编号|Factor|商品的唯一标识|
+|count|商品出售数量|Numeric|记录当日商品出售数量|
+
+在进行数据分析之前，我们需要对原始数据进行一些预处理。首先，我们将原始数据中的和时间有关的变量转化为Date格式：
+```{r}
+visitdata$pos_date <- as.Date(visitdata$pos_date)
+posdata$pos_date <- as.Date(posdata$pos_date)
+```
+
+将原始数据中的ID类变量转化为因子型数据：
+```{r}
+visitdata$store <- as.factor(visitdata$store)
+posdata$store <- as.factor(posdata$store)
+posdata$product <- as.factor(posdata$product)
+```
+
+## 数据描述性分析
+
+绘制总体的顾客性别比例饼状图：
+```{r warning=FALSE}
+num <- colSums(visitdata[,3:4])
+sex <- c('male', 'female')
+
+df <- data.frame(sex = sex, num = num)
+p <- ggplot(data = df,
+            mapping = aes(x = 'Sex', y = num, fill = sex)) + 
+            geom_bar(stat = 'identity', position = 'stack', width = 0.2)
+
+label <- c('female(25.4%)', 'male(74.6%)')
+labels <- c('male', 'female')
+p + 
+  coord_polar(theta = 'y', start = 100) + #start可以转这个圆盘
+  labs(x = '', y = '', title = '') + 
+  theme(axis.text = element_blank()) + 
+  theme(axis.ticks = element_blank()) + 
+  scale_fill_discrete(labels = label) + 
+  theme(legend.text = element_text(size=20), legend.title = element_text(size=20), legend.key.size = unit(30, 'pt')) + 
+  geom_text(aes(y = df$num/2 + c(0, cumsum(df$num)[-length(df$num)]), x = (sum(df$num) + 50000)/3500000, label = labels), size = 7)
+```
+
+展示各个商店所售出的商品种类数与顾客性别比例情况，首先根据门店对顾客数量进行汇总，然后分别计算各个门店的顾客性别比例，由于商品出售信息中缺少S020和S023两个门店的信息，所以在画图时将这两个店去掉：
+```{r warning=FALSE}
+sex_stroe <- aggregate(x = visitdata[c('male_num','female_num')], by = list(visitdata$store), FUN = sum)
+sex_stroe$ratio <- sex_stroe$male_num/sex_stroe$female_num
+
+sex_stroe_count <- sex_stroe[which(!sex_stroe$Group.1 %in% c('S020', 'S023')),]
+sex_stroe_count$Group.1 <- factor(sex_stroe_count$Group.1)
+```
+
+
+使用折线图表示出售商品种类数量信息，使用柱状图表示性别比例信息，用红色的虚线表示整体的男女比率：
+```{r warning=FALSE}
+p <- ggplot(data = sex_stroe_count, mapping = aes(x = store, y = count_product, fill = store, group = 1)) +
+  geom_bar(aes(x = store, y = ratio*60), stat = 'identity') + 
+  geom_point(aes(x = store, y = count_product), shape = 20, size = 5, colour = 'red', alpha = 0.5) + 
+  geom_line(aes(x = store, y = count_product), size = 1.1, alpha = 0.3, colour = 'red', linetype = 'dashed') + 
+  theme_few() + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)) + 
+  guides(fill = FALSE) + 
+  labs(x = '商店', y = '所售商品种数') + 
+  theme(axis.title = element_text(size=16,  family="FZFangSong-Z02")) + 
+  scale_y_continuous(limits = c(0, 800), breaks = c(seq(0, 600, 200)), sec.axis = sec_axis(trans = ~./60, name = '男女顾客比例')) + 
+  geom_hline(aes(yintercept=180), colour="#990000", linetype="dashed") + 
+  theme(legend.position="none")
+
+p
+```
+
+
+## 商品相关性分析
+
+研究者可以根据各类产品的销量量可以分析商品种类的销售关联情况。首先将每类商品在所有门店的总销售量进行汇总，然后判断两个商品的销量是否具有相关性。判断相关性的指标有很多，本例使用衡量数据间线性相关性的皮尔逊相关系数（Pearson Correlation Coefficient）。
+
+```{r warning=FALSE}
+virus <- time_pro[which(time_pro$Group.1%in%corona),]
+novel <- merge(virus[which(virus$Group.1==corona[1]),],virus[which(virus$Group.1==corona[2]),], by='Group.2', all=T)
+novel[is.na(novel)] <- 0
+epidemic <- as.matrix(novel[,c('count.x','count.y')])
+for (i in 3:length(corona)) {
+  novel <- merge(virus[which(virus$Group.1==corona[1]),],virus[which(virus$Group.1==corona[i]),], by='Group.2', all=T)
+  novel[is.na(novel)] <- 0
+  epidemic <- cbind(epidemic, novel$count.y)
+}
+#epidemic <- cbind(epidemic, novel$count.y)
+outbreak <- data.frame(epidemic)
+colnames(outbreak) <- corona
+corrplot(cor(outbreak),type = 'lower',tl.pos = 'ld',tl.cex = 0.75)
+```
+
+图展示了部分商品销量间的相关性，点越大、颜色越深说明线性相关性越强，空白的方格表示两个商品销量间无明显的线性相关关系。借助这种分析可以帮助销售者发现商品之间的联系，对门店销售活动的设计起到指导作用。
+
+
+
+## 关联规则分析
+
+关联规则算法是一种基于规则的机器学习算法，该算法可以在数据中找到感兴趣的关系。它的目的是利用一些度量指标来分辨数据库中存在的强规则，是一种无监督机器学习方法。规则的定义是同时售出的两件商品之间的联系，联系较强就称为强规则，比如“啤酒-尿布”。
+
+以编号为“S001”的商店为例，数据每一行记录了该门店每一个商品在不同日期的销售情况，如果有销售记录就为 TRUE，没有销售记录就为 FALSE。由于数据的稀疏性，使用稀疏矩阵（Sparse Matrix）。稀疏矩阵只记录矩阵中非零值的坐标和数值，所以利用稀疏矩阵可以大大降低稀疏数据占用的储存空间，提高运算速度。
+
+```{r}
+posdata <- read.csv('posdata.csv')
+S001 <- posdata[posdata$store=='S001',]
+Gimgoon <- matrix(0,nrow = 184,ncol = 1245)
+Khan <- data.frame(Gimgoon)
+colnames(Khan) <- levels(posdata$product)
+rownames(Khan) <- unique(posdata$pos_date)
+for (i in 1:184) {
+  Khan[i,c(S001[S001$pos_date==(levels(S001$pos_date)[i]),]$product)] <- S001[S001$pos_date==(levels(S001$pos_date)[i]),]$count
+}
+Tian <- Khan[,!colSums(Khan)==0]!=0
+Crisp <- Matrix(Tian, sparse = T)
+summary(Crisp)[1:5,]
+```
+
+
+对本例使用Apriori算法，寻找1,245件商品中的强规则，这些强规则当中有很多是可以通过经验得到的，比如铅笔和橡皮，但也有部分是通过数据挖掘才可能发现的。对于这部分无法通过日常经验总结出的强规则，研究者需要仔细分析其内在联系，探索可以提升消费的商品组合。
+
+```{r results='hide'}
+rules1 <- apriori ( Tian , 
+                    parameter = list ( supp = 0.9 , conf = 0.8 , target = "rules" , maxlen = 2) ,
+                    control = list ( verbose = FALSE ) )
+Doinb <- inspect(rules1)
+```
+
+```{r}
+rules1
+Doinb[60:65, ]
+```
+
+根据Apriori原理，对于S001商店来说，共找到2348条强规则，包含59个频繁商品项。表格中如“P00272”$\Rightarrow$“P01012”与“P01012”$\Rightarrow$“P00272”这两条规则的支持度是相同的，但是置信度不同，以商品“P01012”为基准计算的置信度为1，而以商品“P00272”为基准计算的置信度为0.9071，说明商品“P01012”售出时总有商品“P00272”售出，但商品“P00272”售出时不一定有商品“P01012”售出。同时在其他的规则中，商品“P00272”也呈现出相似的特征，说明该商品是购物时常常被采购的物品，可以放置在收银台附近。类似的，对其他的门店进行相同的分析，得到各个门店商品间的强规则进行信息的挖掘。将频繁商品项保留在当前的进货清单中，将出售稀少的商品进行适当地筛除，同时借鉴其他门店的强规则增添进货清单中的商品种类。
+
+
+## 商品销量季节性分析
+
+
+季节性商品会在不同的时期体现出不同的销售特点，为了能够更好地确定进货清单中商品的进货量，对各个商品进行季节性分析。
+本例首先将34个门店店的商品数据按照日期进行汇总，以商品编号为“P01308”的商品为例对商品销量数据进行时间序列分析。图是该商品销量的时间序列图。由图可知，“P01308”商品的销售存在明显的季节性特点。在销售旺季到来之前，门店需要提前进货。
+
+```{r}
+season_df <- time_pro[which(time_pro$Group.1=='P01308'),]
+plot(season_df$count)
+lines(season_df$count)
+```
+
+由于门店销售商品的种类繁多，无法通过逐个画图观察的方式来确定商品销量的季节性变动。本例使用 Twitter 开源的一款基于 E-Division with Medians（EDM）算法的时间序列断点 （Breakout）检测工具。这个算法不依赖于正态分布假设，并且可以同时进行给定时间序列上多个断点的检测，非常适合用于商品销量时间序列数据分析。使用该算法对商品“P01308”的时间序列数据进行分析，结果显示在 2014 年 10 月 2 日出现断点，这与直接观察的结果大体一致。将所有的商品销量数据分别分析，可以得到每个商品销量可能出现较大变化的日期，方便门店 在这些日期之前调整对应商品的进货计划。
+
+```{r}
+library(BreakoutDetection)
+res = breakout(season_df$count, min.size=24, method='multi', beta=.001, degree=1, plot=TRUE)
+res$plot
+```
+
+之后按照不同季节的商品出售量平均值来决定不同季节商品的进货量，从而调整进货清单。
+
+## 总结
+
+最终，对每个门店按照上述方式，首先调整进货清单中的商品种类，根据相关性分析和关联规则分析，对原有的进货清单进行适当的增删，然后对每个商品进行季节性分析，调整不同季节的进货量。最终获得每个门店的进货清单，示例如下：
+
+日期| 商店编号 |商品编号 | 出售数量   
+------|------|------|------
+7/1  | S029 | P01308 | 3.31
+10/1 | S029 |P01308 | 12.49
+7/1  | S021 |  P01308  | 0
+10/1  | S021 |  P01308  | 6.64
+...  | ...    | ...   | ...
