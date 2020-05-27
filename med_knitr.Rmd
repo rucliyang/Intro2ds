@@ -1,0 +1,335 @@
+```{r setup, include=FALSE}
+options(
+  htmltools.dir.version = FALSE, formatR.indent = 2, width = 55, digits = 4
+)
+
+##### 加载R包 ####
+library(readxl)
+library(dplyr)
+library(showtext)
+library(ggplot2)
+library(tseries)
+library(forecast)
+library(arules)
+require(MASS)
+
+##### 读入数据 ####
+hisdf <- read.csv(file = "hisdf2020.csv")
+hisdf <- hisdf[,-1]
+emrdf <- read.csv(file = "emrdf2020.csv")
+emrdf <- emrdf[,-1]
+disease_type <- read.csv(file = "disease_type.csv")
+colnames(disease_type) <- c("finaldiagnosis", "type", "finaldcode")
+
+##### 数据预处理 ####
+
+## 对原始数据中的时间转化为Date格式
+emrdf$admissiontime <- as.Date(emrdf$admissiontime)
+emrdf$leavetime <- as.Date(emrdf$leavetime)
+
+## 数据框合并
+data.all<-left_join(emrdf, hisdf, by = "patientid")
+data.all<-left_join(data.all, disease_type, by = "finaldcode")
+
+## 生成新的变量
+
+# BMI
+data.all$BMI<-data.all$weight/(data.all$height/100)^2
+data.all$admissiontime<-as.Date(data.all$admissiontime)
+
+# 准确年龄
+data.all$birthday<-as.Date(data.all$birthday)
+data.all$agenew<-(data.all$admissiontime-data.all$birthday)/(365)
+data.all$agenew<-floor(data.all$agenew)
+
+# 是否患病
+data.all$type<-ifelse( data.all$type == "心脑血管", "Y", "N")
+
+## 筛选出年龄在35至85岁之间的人群作为观察人群
+data.1<-data.all[data.all$agenew>=35&data.all$agenew<=85,]
+data.1$agenew<-as.numeric(data.1$agenew)
+
+## 分割训练集和测试集
+data.train<-data.1[data.1$admissiontime<"2018-01-01", ]
+data.test<-data.1[data.1$admissiontime>="2018-01-01", ]
+
+##### 潜在因素筛选 ####
+
+# BMI
+d <- ggplot(data.train, aes(type, BMI ,fill = type)) + geom_boxplot()
+d3 <- d +theme_bw()+scale_fill_grey(start = 0.8, end = 0.3)+xlab("是否患病")+  labs(fill="是否患病")
+
+
+## 假设检验
+
+# 身高
+height.y <- data.train$height[data.train$type == "Y"]
+height.n <- data.train$height[data.train$type == "N"]
+y.bar <- mean(height.y)
+n.bar <- mean(height.n)
+n1 <- length(height.y)
+n2 <- length(height.n)
+difference <- y.bar - n.bar
+sigma1 <- sum((height.y - y.bar)^2)/(n1 - 1)
+sigma2 <- sum((height.n - n.bar)^2)/(n2 - 1)
+sd.all <- sqrt( (sigma1/n1)+(sigma2/n2))
+z.height <- difference/sd.all
+pvalue.height <- pnorm(z.height, lower.tail = FALSE)
+
+# 体重
+weight.y <- data.train$weight[data.train$type == "Y"]
+weight.n <- data.train$weight[data.train$type == "N"]
+y.bar <- mean(weight.y)
+n.bar <- mean(weight.n)
+n1 <- length(weight.y)
+n2 <- length(weight.n)
+difference <- y.bar - n.bar
+sigma1 <- sum((weight.y - y.bar)^2)/(n1 - 1)
+sigma2 <- sum((weight.n - n.bar)^2)/(n2 - 1)
+sd.all <- sqrt( (sigma1/n1)+(sigma2/n2))
+z.weight <- difference/sd.all
+pvalue.weight <- pnorm(z.weight, lower.tail = FALSE)
+
+# BMI
+BMI.y <- data.train$BMI[data.train$type == "Y"]
+BMI.n <- data.train$BMI[data.train$type == "N"]
+y.bar <- mean(BMI.y)
+n.bar <- mean(BMI.n)
+n1 <- length(BMI.y)
+n2 <- length(BMI.n)
+difference <- y.bar - n.bar
+sigma1 <- sum((BMI.y - y.bar)^2)/(n1 - 1)
+sigma2 <- sum((BMI.n - n.bar)^2)/(n2 - 1)
+sd.all <- sqrt( (sigma1/n1)+(sigma2/n2))
+z.bmi <- difference/sd.all
+pvalue.bmi <- pnorm(z.bmi, lower.tail = FALSE)
+
+##### 线性判别分析模型建立 ####
+
+lung.lda <- lda(type ~ sex + agenew + BMI + agenew :BMI, data = data.train)
+lung.predict <- predict(lung.lda, data.test)
+lung.class <- lung.predict$class
+table.mean <- lung.lda$means
+result <- data.frame(data.test$type, lung.class)
+
+TPR <- sum(lung.class[result$data.test.type == "Y"] == "Y")/sum(result$data.test.type == "Y")
+
+TNR <- sum(lung.class[result$data.test.type == "N"] == "N")/sum(result$data.test.type == "N")
+
+
+
+```
+
+# 医疗数据分析
+
+## 数据简介
+
+本案例使用两个常见的医疗信息系数据建立疾病辅助诊断模型，辅助心脑血管疾病的诊断与预防。基本思路如图所示，其主要包含以下两个步骤：首先对两个信息系统中的数据进行整合，去除缺失值样本和异常值样本；然后对潜在的发病因素进行筛选，再利用筛选出来的因素建立辅助诊断的疾病预测模型。
+
+![](figure/medana.png){ width="80%" }
+
+## 数据预处理
+
+本案例数据来自于两个信息系统：第一个是包含患者基本信息的医院信息系统（HIS 系统），记录了每一位患者的基础信息和生理指标；第二个是包含就诊记录的电子病历系统 (Electronic Medical Record, 简称 EMR)，记录了病人就诊的详细情况和诊断结果，两张表格的信息见下表：
+
+### 医院信息系统
+
+| 变量名 | 变量类型 | 备注 |
+| ------ | ------ | ------ |
+| 患者ID | 定性 | 患者的唯一标识 |
+| 性别 | 定性 | 二分类变量：M，F |
+| 患者年龄 | 定量 | 数值型变量：最小值为`r min(hisdf$age)`，最大值为`r max(hisdf$age)` |
+| 血型 | 定性 | 四分类变量：A，B，AB，O |
+| RH型血 | 定性 | 二分类变量：P，N |
+| 民族 | 定性 | 多分类变量：汉，满，回…… |
+| 文化程度 | 定性 | 四分类变量：小学，初中，高中，大学即以上 |
+| 身高 | 定量 | 数值型变量：最小值为`r min(hisdf$height)`，最大值为`r max(hisdf$height)` |
+| 体重 | 定量 | 数值型变量：最小值为`r min(hisdf$weight)`，最大值为`r max(hisdf$weight)` |
+
+### 电子病历系统
+
+| 变量名 | 变量类型 | 备注 |
+| ------ | ------ | ------ |
+| 就诊编号 | 定性 | 就诊的唯一标识 |
+| 就诊类型 | 定性 | 二分类变量：住院，门诊 |
+| 患者ID | 定性 | 患者的唯一标识 |
+| 入院时间 | 定量 | 数值型变量：最早`r format(min(emrdf$admissiontime), format = "%Y-%m-%d")`，最晚`r format(max(emrdf$admissiontime), format = "%Y-%m-%d")` |
+| 入院科室 | 定性 | 二分类变量：呼吸科，综合内科 |
+| 出院时间 | 定量 | 数值型变量：`r format(min(emrdf$leavetime[ifelse(is.na(emrdf$leavetime) == TRUE, FALSE, TRUE)]), format = "%Y-%m-%d")`，最晚`r format(max(emrdf$leavetime[ifelse(is.na(emrdf$leavetime) == TRUE, FALSE, TRUE)]), format = "%Y-%m-%d")`|
+| 出院科室 | 定性 | 二分类变量：呼吸科，综合内科 |
+| 最终诊断 | 定性 | 最终诊断的结果 |
+| 诊断疾病编码 | 定性 | 诊断结果的唯一编码 |
+
+在进行数据分析之前，我们需要对原始数据进行一些预处理。首先，我们将原始数据中的和时间有关的变量转化为Date格式：
+```{r}
+emrdf$admissiontime <- as.Date(emrdf$admissiontime)
+emrdf$leavetime <- as.Date(emrdf$leavetime)
+```
+虽然两个系统记录了两个不同方面的信息，但是它们可以通过一个共同的变量患者ID建立起联系。研究者将两个系统中的患者ID作为主键进行数据合并，可以得到一个刻画患者信息及患者就诊信息的完整系统，该系统覆盖了从`r format(min(emrdf$admissiontime), format = "%Y-%m-%d")`到`r format(max(emrdf$admissiontime), format = "%Y-%m-%d")`之间`r nrow(hisdf)`名患者的`r nrow(emrdf)`条就诊记录，其中门诊记录`r sum(emrdf$recordtype == "门诊")`条，住院记录`r sum(emrdf$recordtype == "住院")`条。合并代码如下：
+```{r}
+data.all<-left_join(emrdf, hisdf, by = "patientid")
+data.all<-left_join(data.all, disease_type, by = "finaldcode")
+```
+我们利用原始数据生成两个新的变量：BMI（连续型）和是否患心脑血管疾病（0-1型）
+```{r}
+data.all$BMI<-data.all$weight/(data.all$height/100)^2
+data.all$admissiontime<-as.Date(data.all$admissiontime)
+data.all$type<-ifelse( data.all$type == "心脑血管", "Y", "N")
+```
+注意到表格中的部分数据中的年龄与就诊日期和出生日期之间的差值不符合，为了解决该问题，我们将就诊日期和出生日期之间的差值作为准确的年龄，用于后续的分析。
+```{r}
+data.all$birthday<-as.Date(data.all$birthday)
+data.all$agenew<-(data.all$admissiontime-data.all$birthday)/(365)
+data.all$agenew<-floor(data.all$agenew)
+```
+最后我们选择出年龄在35至85岁之间的人群作为研究人群。
+```{r}
+data.1<-data.all[data.all$agenew>=35&data.all$agenew<=85,]
+data.1$agenew<-as.numeric(data.1$agenew)
+```
+其次注意到原始数据中存在一些记录错误，例如存在入院时间减去出生日期所得与患者年龄不相符的情况，将这一类观测都作为缺失值来处理。最后可以得到`r length(unique(data.1$patientid))`名患者的`r nrow(data.1)`条有效就诊记录。
+
+为了评价方法的表现，将分析数据分割成训练集和测试集：
+```{r}
+data.train<-data.1[data.1$admissiontime<"2018-01-01", ]
+data.test<-data.1[data.1$admissiontime>="2018-01-01", ]
+```
+
+## 潜在风险因素筛选
+
+通常来说，心脑血管的发病风险与个体的一些生理特征密切相关。本案例首先对性别，血型，身高，体重和年龄五个重要变量在患病人群和正常人群中的分布进行刻画：对于离散变量，绘制正常人群和患病人群中类别变量的占比；对于连续变量，绘制各个变量取值在正常人群和患病人群中的箱线图， 见下图：
+
+```{r}
+Y.ratio<-table(data.train$sex[data.train$type == "Y"])/sum(data.train$type == "Y")
+N.ratio<-table(data.train$sex[data.train$type == "N"])/sum(data.train$type == "N")
+YN <- c("Y", "Y", "N", "N")
+ratio <- c(Y.ratio, N.ratio)
+sex <- c("F", "M", "F", "M")
+mydata <- data.frame(YN, ratio, sex)
+p <- ggplot(mydata,aes(x=YN,y=ratio,fill=sex))+geom_bar(position="dodge",stat="identity")
+(p_1<-p+xlab("是否患病") + ylab("性别占比") + labs(fill="性别")+ theme_bw()+scale_fill_grey(start = 0.8, end = 0.4))
+```
+
+
+```{r}
+Y.ratio<-table(data.train$bloodtype[data.train$type == "Y"])/sum(data.train$type == "Y")
+N.ratio<-table(data.train$bloodtype[data.train$type == "N"])/sum(data.train$type == "N")
+YN <- c("Y", "Y","Y", "Y", "N", "N", "N", "N")
+ratio <- c(Y.ratio, N.ratio)
+bloodtype <- c("A", "AB", "B", "O", "A", "AB", "B", "O")
+mydata <- data.frame(YN, ratio, bloodtype)
+p <- ggplot(mydata,aes(x=YN,y=ratio,fill=bloodtype))+geom_bar(position="dodge",stat="identity")
+(p_2<-p+xlab("是否患病") + ylab("血型占比") + labs(fill="血型")+ theme_bw()+scale_fill_grey(start = 0.8, end = 0.3))
+```
+
+
+```{r}
+d <- ggplot(data.train, aes(type, height ,fill = type)) + geom_boxplot()
+(d1 <- d +theme_bw()+scale_fill_grey(start = 0.8, end = 0.3)+xlab("是否患病")+  labs(fill="是否患病"))
+```
+
+
+```{r}
+d <- ggplot(data.train, aes(type, weight ,fill = type)) + geom_boxplot()
+(d2 <- d +theme_bw()+scale_fill_grey(start = 0.8, end = 0.3)+xlab("是否患病")+  labs(fill="是否患病"))
+```
+
+
+
+
+```{r}
+d <- ggplot(data.train, aes(type, agenew ,fill = type)) + geom_boxplot()
+(d4 <- d +theme_bw()+scale_fill_grey(start = 0.8, end = 0.3)+xlab("是否患病")+  labs(fill="是否患病"))
+```
+
+
+
+通过比较可以发现，虽然在正常人群和患病人群中男性的比例都比女性高，但是患病人群中男性的比例会比正常人群中男性的比例更高。其次，观察正常人群和患病人群在不同血型中的分布可以发现血型的分布基本一致。因此，对两个类别型变量而言，性别特征可能成为区分是否患有心脑血管疾病的重要变量，而血型对于区分是否患有心脑血管疾病可能缺少有效的信息。对于年龄，患病人群的平均年龄明显大于正常人群，这说明老年人更有可能罹患心脑血管疾病。但是，从箱线图中可以看出，正常人群和患病人群在身高和体重上的差异并不是很大，与实际经验并不一致。
+
+
+为了进一步对身高和体重这两个变量进行刻画，可以利用假设检验来比较正常人群和患病人群中变量的均值。由于这是大样本情形，研究者可以使用两总体均值的大样本Z检验，设置检验的显著性水平为0.05，提出以下两个假设检验问题：
+  $$H_0: \text{正常人群的身高等于患病人群的身高}\leftrightarrow H_1: \text{正常人群的不等于患病人群的身高}.$$
+
+$$
+  H_0: \text{正常人群的体重等于患病人群的体重}\leftrightarrow H_1: \text{正常人群的不等于患病人群的体重}.
+$$
+```{r}
+# 身高
+height.y <- data.train$height[data.train$type == "Y"]
+height.n <- data.train$height[data.train$type == "N"]
+y.bar <- mean(height.y)
+n.bar <- mean(height.n)
+n1 <- length(height.y)
+n2 <- length(height.n)
+difference <- y.bar - n.bar
+sigma1 <- sum((height.y - y.bar)^2)/(n1 - 1)
+sigma2 <- sum((height.n - n.bar)^2)/(n2 - 1)
+sd.all <- sqrt( (sigma1/n1)+(sigma2/n2))
+z.height <- difference/sd.all
+pvalue.height <- pnorm(z.height, lower.tail = FALSE)
+
+# 体重
+weight.y <- data.train$weight[data.train$type == "Y"]
+weight.n <- data.train$weight[data.train$type == "N"]
+y.bar <- mean(weight.y)
+n.bar <- mean(weight.n)
+n1 <- length(weight.y)
+n2 <- length(weight.n)
+difference <- y.bar - n.bar
+sigma1 <- sum((weight.y - y.bar)^2)/(n1 - 1)
+sigma2 <- sum((weight.n - n.bar)^2)/(n2 - 1)
+sd.all <- sqrt( (sigma1/n1)+(sigma2/n2))
+z.weight <- difference/sd.all
+pvalue.weight <- pnorm(z.weight, lower.tail = FALSE)
+```
+
+计算得到问题1的Z统计量为`r z.height`， p值为`r pvalue.height`，不能够拒绝原假设$H_0$，不能够说明正常人群和患病人群的身高存在明显的差异。计算得到假设检验问题2的Z统计量为`r z.weight`， p值为`r pvalue.weight`，可以拒绝原假设，能够说明正常人群和患病人群的体重存在明显的差异。假设检验的结论与描述统计结论是一致的。
+
+```{r}
+# BMI
+BMI.y <- data.train$BMI[data.train$type == "Y"]
+BMI.n <- data.train$BMI[data.train$type == "N"]
+y.bar <- mean(BMI.y)
+n.bar <- mean(BMI.n)
+n1 <- length(BMI.y)
+n2 <- length(BMI.n)
+difference <- y.bar - n.bar
+sigma1 <- sum((BMI.y - y.bar)^2)/(n1 - 1)
+sigma2 <- sum((BMI.n - n.bar)^2)/(n2 - 1)
+sd.all <- sqrt( (sigma1/n1)+(sigma2/n2))
+z.bmi <- difference/sd.all
+pvalue.bmi <- pnorm(z.bmi, lower.tail = FALSE)
+```
+
+作为影响心脑血管疾病的重要因素，身高的分析结论却与预期不符，导致该现象的原因可能我们忽略了变量之间的交互作用，比如说身高和体重间的交互作用——身体质量指数（BMI，Body Mass Index），可以作为个体的肥胖程度的度量。所以，我们进一步对BMI指数进行假设检验，以探究其在正常人群和患病人群中是否存在差异，计算得到Z统计量为`r z.bmi`， p值为`r pvalue.bmi`，所以我们可以拒绝原假设$H_0$，得到结论，患病人群的BMI要显著大于正常人群的BMI，也就意味着肥胖人群更加容易罹患心脑血管疾病。
+
+综上所述，通过初步分析发现性别、年龄、BMI指数在正常人群和患病人群中存在较为明显的差异，这三个变量可能是影响心脑血管发病风险的潜在因素。
+
+## 疾病预测模型
+
+疾病预测模型将和心脑血管的发病有关系的特征变量信息整合起来建议预测机制。当新的患者就诊时，该模型可以根据患者特征对其患病风险做出一个初步的判断，以辅助医生诊断。通过之前对心脑血管疾病的人口特征进行刻画，本案例可以初步筛选出三个与心脑血管疾病相关的变量：性别、年龄、BMI指数。另外，可以考虑将年龄和BMI指数的交互效应也作为一个新变量加入到疾病预测模型中来。本案例使用线性判别分析作为建模工具，可以通过R语言中MASS包的lda函数实现。本案例使用2016 年1 月1 日到2018 年12 月31 的样本作为训练数据，将2019 年1 月1 日到2019 年12 月31 的样本作为评价数据。线性判别分析的代码如下：
+```{r}
+lung.lda <- lda(type ~ sex + agenew + BMI + agenew :BMI, data = data.train)
+lung.predict <- predict(lung.lda, data.test)
+lung.class <- lung.predict$class
+table.mean <- lung.lda$means
+```
+
+从下表的初步分析可以发现，年龄与BMI指数的交互效应在两类人群中有比较明显的差异，这说明患病人群中年龄越大且BMI指数越高的个体越有可能罹患心脑血管疾病。
+
+```{r tbl01, echo=FALSE, message=FALSE,results='asis'}
+knitr::kable(table.mean, caption="变量在两类人群中的均值")
+```
+
+```{r}
+result <- data.frame(data.test$type, lung.class)
+TPR <- sum(lung.class[result$data.test.type == "Y"] == "Y")/sum(result$data.test.type == "Y")
+TNR <- sum(lung.class[result$data.test.type == "N"] == "N")/sum(result$data.test.type == "N")
+```
+
+根据模型的输出结果，可以得到性别、年龄、BMI以及年龄和BMI的交互效应的系数估计分别为`r lung.lda$scaling[1]`，`r lung.lda$scaling[2]`，`r lung.lda$scaling[3]`和`r lung.lda$scaling[4]`。将该模型应用到评价数据上面，可以发现该模型模型在评价数据上也有较好的分类效果，灵敏度（TPR）与特异度（TNR）分别为`r TPR`和`r TNR`。
+
+
+## 总结
+
+在本案例中，研究者对心脑血管疾病的发病人群特征进行了分析：首先对心脑血管的发病潜在影响因素进行初步筛选，并且通过线性判别分析建立了预测能力优良的疾病分类模型。在实际应用中，该模型能帮助医生识别心脑血管发病的可疑人群，做到尽早预防尽早治疗，对于医疗资源的调控和公众的健康管理都有较强的现实指导意义。
