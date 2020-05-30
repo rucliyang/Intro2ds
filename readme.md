@@ -15,19 +15,19 @@ Chap2 Programming Tools in Data Science
 
 Chap3 Mathematical Basic in Data Science
 
-第一章 绪论
+Chap4 Statistical Principle in Data Science
 
-第二章 数据科学的编程工具
+Chap5 Data Visulization
 
-第三章 数据科学的数学基础
+Chap6 Data Mining and Machine Learning
 
-第四章 数据科学的统计原则
+Chap7 Artificial Intelligence
 
-第五章 数据可视化
+Chap8 
 
-第六章 数据挖掘与机器学习
 
-第七章 人工智能
+
+
 
 第八章 非结构化数据分析
 
