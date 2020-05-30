@@ -9,6 +9,12 @@ The slides can be downloaded at the website of Renmin University Press.
 
 Content
 
+Chap1 Introduction
+
+Chap2 Programming Tool in Data Science
+
+Chap3 Mathematical Basic in Data Science
+
 第一章 绪论
 
 第二章 数据科学的编程工具
