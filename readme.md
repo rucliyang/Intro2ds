@@ -31,7 +31,7 @@ Chap9 Database and Data Warehouse
 
 Chap10 Big Data Platform
 
-Chap11 Reproducible Research and Productization
+Chap11 Reproducible Research
 
 Chap12 Applications
 
