@@ -11,7 +11,7 @@ Content
 
 Chap1 Introduction
 
-Chap2 Programming Tool in Data Science
+Chap2 Programming Tools in Data Science
 
 Chap3 Mathematical Basic in Data Science
 
