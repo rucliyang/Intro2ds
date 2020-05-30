@@ -25,13 +25,13 @@ Chap7 Artificial Intelligence
 
 Chap8 Unstructural Data Analysis
 
-Chap9 Database and Data Wearhouse
+Chap9 Database and Data Warehouse
 
 Chap10 Big Data Platform
 
-Chap11 
+Chap11 Reproducible Research and Productization
 
 Chap12 Applications
 
-第十一章 可重复研究与产品化
+
 
