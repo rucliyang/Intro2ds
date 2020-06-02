@@ -13,7 +13,7 @@ Content
 
 Chap1 Introduction
 
-Chap2 Programming Tools
+Chap2 Programming Tool
 
 Chap3 Mathematical Basic
 
