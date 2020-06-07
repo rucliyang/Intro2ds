@@ -12,16 +12,7 @@ Content
 
 Chap1 Introduction
 
-  1.1 Concept
-
-  1.2 Histroy
-  
-  1.3 Applied Areas
-
 Chap2 Programming Tool
-  2.1 R
-  2.2 Python
-  2.3 Julia
   
 Chap3 Mathematical Basic
 
