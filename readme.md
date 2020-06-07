@@ -11,8 +11,11 @@ The slides can be downloaded at the website of Renmin University Press.
 Content
 
 Chap1 Introduction
+
   1.1 Concept
+
   1.2 Histroy
+  
   1.3 Applied Areas
 
 Chap2 Programming Tool
